@@ -1,11 +1,19 @@
 /*******************************************************************************
 * Copyright (c) 2012-2014, The Microsystems Design Labratory (MDL)
 * Department of Computer Science and Engineering, The Pennsylvania State University
+*
+* Copyright (c) 2019-2022, Chair for Compiler Construction
+* Department of Computer Science, TU Dresden
 * All rights reserved.
 * 
 * This source code is part of NVMain - A cycle accurate timing, bit accurate
 * energy simulator for both volatile (e.g., DRAM) and non-volatile memory
-* (e.g., PCRAM). The source code is free and you can redistribute and/or
+* (e.g., PCRAM). 
+* 
+* The original NVMain doesn't support simulating RaceTrack memory.
+* This current version, which we call RTSim, enables RTM simulation. 
+* 
+* The source code is free and you can redistribute and/or
 * modify it by providing that the following conditions are met:
 * 
 *  1) Redistributions of source code must retain the above copyright notice,
@@ -31,6 +39,9 @@
 *                     Website: http://www.cse.psu.edu/~poremba/ )
 *   Tao Zhang       ( Email: tzz106 at cse dot psu dot edu
 *                     Website: http://www.cse.psu.edu/~tzz106 )
+*
+*   Asif Ali Khan   ( Email: asif_ali.khan@tu-dresden.de )
+* 
 *******************************************************************************/
 
 #include "src/MemoryController.h"
@@ -408,7 +419,7 @@ void MemoryController::SetConfig( Config *conf, bool createChildren )
      *  number of devices = bus width / device width
      *  Total channel size is: loglcal bank size * BANKS * RANKS
      */
-    std::cout << StatName( ) << " capacity is " << ((p->ROWS * p->COLS * p->tBURST * p->RATE * p->BusWidth * p->BANKS * p->RANKS) / (8*1024*1024)) << " MB." << std::endl;
+    std::cout << StatName( ) << " capacity is " << ((p->ROWS * p->COLS * p->tBURST * p->RATE * p->BusWidth * p->BANKS * p->RANKS) / (8*1024)) << " KB." << std::endl;
 
     if( conf->KeyExists( "MATHeight" ) )
     {
@@ -941,6 +952,36 @@ NVMainRequest *MemoryController::MakeActivateRequest( const ncounter_t row,
     activateRequest->owner = this;
 
     return activateRequest;
+}
+
+NVMainRequest *MemoryController::MakeShiftRequest( NVMainRequest *triggerRequest )
+{
+    NVMainRequest *shiftRequest = new NVMainRequest();
+
+    shiftRequest->type = SHIFT;
+    shiftRequest->issueCycle = GetEventQueue()->GetCurrentCycle();
+    shiftRequest->address = triggerRequest->address;
+    shiftRequest->owner = this;
+
+    return shiftRequest;
+}
+
+NVMainRequest *MemoryController::MakeShiftRequest(const ncounter_t row,
+                                                    const ncounter_t col,
+                                                    const ncounter_t bank,
+                                                    const ncounter_t rank,
+                                                    const ncounter_t subarray)
+{
+    NVMainRequest *shiftRequest = new NVMainRequest();
+
+    shiftRequest->type = SHIFT;
+    ncounter_t actAddr = GetDecoder()->ReverseTranslate(row, col, bank, rank, id, subarray);
+    shiftRequest->address.SetPhysicalAddress(actAddr);
+    shiftRequest->address.SetTranslatedAddress(row, col, bank, rank, id, subarray);
+    shiftRequest->issueCycle = GetEventQueue()->GetCurrentCycle();
+    shiftRequest->owner = this;
+
+    return shiftRequest;
 }
 
 NVMainRequest *MemoryController::MakePrechargeRequest( NVMainRequest *triggerRequest )
@@ -1552,6 +1593,13 @@ bool MemoryController::IssueMemoryCommands( NVMainRequest *req )
         }
         else
         {
+            if( p->MemIsRTM )
+            {
+                NVMainRequest *shiftRequest = MakeShiftRequest( req ); //Place a shift request before the actual read/write on the command queue
+                shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting( )) ? NVMainRequest::FLAG_PRIORITY : 0;
+                commandQueues[queueId].push_back( shiftRequest );
+            }
+
             commandQueues[queueId].push_back( req );
         }
 
@@ -1578,6 +1626,14 @@ bool MemoryController::IssueMemoryCommands( NVMainRequest *req )
         NVMainRequest *actRequest = MakeActivateRequest( req );
         actRequest->flags |= (writingArray != NULL && writingArray->IsWriting( )) ? NVMainRequest::FLAG_PRIORITY : 0;
         commandQueues[queueId].push_back( actRequest );
+
+        if( p->MemIsRTM )
+        {
+             NVMainRequest *shiftRequest = MakeShiftRequest( req ); //Place a shift request before the actual read/write on the command queue
+             shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting( )) ? NVMainRequest::FLAG_PRIORITY : 0;
+             commandQueues[queueId].push_back( shiftRequest );
+        }
+
         commandQueues[queueId].push_back( req );
         activeSubArray[rank][bank][subarray] = true;
         effectiveRow[rank][bank][subarray] = row;
@@ -1606,6 +1662,13 @@ bool MemoryController::IssueMemoryCommands( NVMainRequest *req )
             /* if Restricted Close-Page is applied, we should never be here */
             assert( p->ClosePage != 2 );
 
+            if( p->MemIsRTM )
+            {
+                NVMainRequest *shiftRequest = MakeShiftRequest( req ); //Place a shift request before the actual read/write on the command queue
+                shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting( )) ? NVMainRequest::FLAG_PRIORITY : 0;
+                commandQueues[queueId].push_back( shiftRequest );
+            }
+
             commandQueues[queueId].push_back( MakeImplicitPrechargeRequest( req ) );
             activeSubArray[rank][bank][subarray] = false;
             effectiveRow[rank][bank][subarray] = p->ROWS;
@@ -1626,6 +1689,13 @@ bool MemoryController::IssueMemoryCommands( NVMainRequest *req )
         }
         else
         {
+            if( p->MemIsRTM )
+            {
+                NVMainRequest *shiftRequest = MakeShiftRequest( req ); //Place a shift request before the actual read/write on the command queue
+                shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting( )) ? NVMainRequest::FLAG_PRIORITY : 0;
+                commandQueues[queueId].push_back( shiftRequest );
+            }
+
             commandQueues[queueId].push_back( req );
         }
 

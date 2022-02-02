@@ -1,11 +1,19 @@
 /*******************************************************************************
 * Copyright (c) 2012-2014, The Microsystems Design Labratory (MDL)
 * Department of Computer Science and Engineering, The Pennsylvania State University
+*
+* Copyright (c) 2019-2022, Chair for Compiler Construction
+* Department of Computer Science, TU Dresden
 * All rights reserved.
 * 
 * This source code is part of NVMain - A cycle accurate timing, bit accurate
 * energy simulator for both volatile (e.g., DRAM) and non-volatile memory
-* (e.g., PCRAM). The source code is free and you can redistribute and/or
+* (e.g., PCRAM). 
+* 
+* The original NVMain doesn't support simulating RaceTrack memory.
+* This current version, which we call RTSim, enables RTM simulation. 
+* 
+* The source code is free and you can redistribute and/or
 * modify it by providing that the following conditions are met:
 * 
 *  1) Redistributions of source code must retain the above copyright notice,
@@ -29,6 +37,9 @@
 * Author list: 
 *   Matt Poremba    ( Email: mrp5060 at psu dot edu 
 *                     Website: http://www.cse.psu.edu/~poremba/ )
+*
+*   Asif Ali Khan   ( Email: asif_ali.khan@tu-dresden.de )
+* 
 *******************************************************************************/
 
 #include "MemControl/MemoryControllerFactory.h"
@@ -40,6 +51,7 @@
 #include "MemControl/LH-Cache/LH-Cache.h"
 #include "MemControl/LO-Cache/LO-Cache.h"
 #include "MemControl/PredictorDRC/PredictorDRC.h"
+#include "MemControl/RTM/RTM.h"
 
 #include <iostream>
 
@@ -68,6 +80,8 @@ MemoryController *MemoryControllerFactory::CreateNewController( std::string cont
         memoryController = new LO_Cache( );
     else if( controller == "PredictorDRC" )
         memoryController = new PredictorDRC( );
+    else if (controller == "RTM")
+        memoryController = new RTM();
 
     if( memoryController == NULL )
         std::cout << "NVMain: Unknown memory controller `" 

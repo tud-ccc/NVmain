@@ -1,11 +1,19 @@
 /*******************************************************************************
 * Copyright (c) 2012-2014, The Microsystems Design Labratory (MDL)
 * Department of Computer Science and Engineering, The Pennsylvania State University
+*
+* Copyright (c) 2019-2022, Chair for Compiler Construction
+* Department of Computer Science, TU Dresden
 * All rights reserved.
 * 
 * This source code is part of NVMain - A cycle accurate timing, bit accurate
 * energy simulator for both volatile (e.g., DRAM) and non-volatile memory
-* (e.g., PCRAM). The source code is free and you can redistribute and/or
+* (e.g., PCRAM). 
+* 
+* The original NVMain doesn't support simulating RaceTrack memory.
+* This current version, which we call RTSim, enables RTM simulation. 
+* 
+* The source code is free and you can redistribute and/or
 * modify it by providing that the following conditions are met:
 * 
 *  1) Redistributions of source code must retain the above copyright notice,
@@ -31,6 +39,9 @@
 *                     Website: http://www.cse.psu.edu/~poremba/ )
 *   Tao Zhang       ( Email: tzz106 at cse dot psu dot edu
 *                     Website: http://www.cse.psu.edu/~tzz106 )
+*
+*   Asif Ali Khan   ( Email: asif_ali.khan@tu-dresden.de )
+* 
 *******************************************************************************/
 
 #ifndef __DDR3BANK_H__
@@ -138,6 +149,11 @@ class DDR3Bank : public Bank
     bool writeCycle;
     WriteMode writeMode;
 
+    //RTM Stats
+    double shiftEnergy;
+    ncounter_t shiftReqs;
+    ncounter_t totalNumShifts;
+
     ncounter_t actWaits;
     ncounter_t actWaitTotal;
     double actWaitAverage;
@@ -166,6 +182,7 @@ class DDR3Bank : public Bank
     ncounter_t bankId;
  
     virtual bool Activate( NVMainRequest *request );
+    virtual bool Shift( NVMainRequest *request ); 
     virtual bool Read( NVMainRequest *request );
     virtual bool Write( NVMainRequest *request );
     virtual bool Precharge( NVMainRequest *request );

@@ -1,11 +1,19 @@
 /*******************************************************************************
 * Copyright (c) 2012-2014, The Microsystems Design Labratory (MDL)
 * Department of Computer Science and Engineering, The Pennsylvania State University
+*
+* Copyright (c) 2019-2022, Chair for Compiler Construction
+* Department of Computer Science, TU Dresden
 * All rights reserved.
 * 
 * This source code is part of NVMain - A cycle accurate timing, bit accurate
 * energy simulator for both volatile (e.g., DRAM) and non-volatile memory
-* (e.g., PCRAM). The source code is free and you can redistribute and/or
+* (e.g., PCRAM). 
+* 
+* The original NVMain doesn't support simulating RaceTrack memory.
+* This current version, which we call RTSim, enables RTM simulation. 
+* 
+* The source code is free and you can redistribute and/or
 * modify it by providing that the following conditions are met:
 * 
 *  1) Redistributions of source code must retain the above copyright notice,
@@ -29,6 +37,9 @@
 * Author list: 
 *   Tao Zhang       ( Email: tzz106 at cse dot psu dot edu
 *                     Website: http://www.cse.psu.edu/~tzz106 )
+*
+*   Asif Ali Khan   ( Email: asif_ali.khan@tu-dresden.de )
+* 
 *******************************************************************************/
 
 #include "src/SubArray.h"
@@ -40,6 +51,7 @@
 #include "Endurance/NullModel/NullModel.h"
 #include "Endurance/Distributions/Normal.h"
 #include "DataEncoders/DataEncoderFactory.h"
+#include "MemControl/RTM/RTM.h"
 
 #include <signal.h>
 #include <cassert>
@@ -118,6 +130,15 @@ SubArray::SubArray( )
     precharges = 0;
     refreshes = 0;
 
+    //RTM
+    shiftEnergy = 0.0f;
+    shiftReqs = 0;
+    numShifts = 0;
+    totalNumShifts = 0;
+    
+    wordSize = 1; //Standard value so no div by 0
+    //RTM End
+
     actWaits = 0;
     actWaitTotal = 0;
     actWaitAverage = 0.0;
@@ -153,6 +174,34 @@ void SubArray::SetConfig( Config *c, bool createChildren )
     Params *params = new Params( );
     params->SetParams( c );
     SetParams( params );
+
+    if (p->MemIsRTM)
+    {       
+        DBCS    = p->DBCS;
+        DOMAINS = p->DOMAINS;
+        nPorts  = p->nPorts;
+        wordSize = p->wordSize;
+        
+        rwPortPos = new int*[DBCS];
+        rwPortInitPos = new int*[DBCS];
+        
+        for (ncounter_t i = 0; i < DBCS; i++)
+        {
+            rwPortPos[i] = new int[nPorts];
+            rwPortInitPos[i] = new int[nPorts];
+
+            for (ncounter_t j = 0; j < nPorts; j++)
+            {
+                //Generalized:
+                //rwPortPos[i][j]     = (j == 0) ? 0 : (j * DOMAINS / nPorts) - 1;
+                //rwPortInitPos[i][j] = (j == 0) ? 0 : (j * DOMAINS / nPorts) - 1;
+
+                //Specialized for some reason -> ask Asif?
+                rwPortPos[i][j]     = j * DOMAINS / nPorts;
+                rwPortInitPos[i][j] = j * DOMAINS / nPorts;
+            }
+        }
+    }
 
     MATHeight = p->MATHeight;
     /* customize MAT size */
@@ -203,14 +252,36 @@ void SubArray::SetConfig( Config *c, bool createChildren )
 
 void SubArray::RegisterStats( )
 {
-    if( endrModel )
+    if( p->MemIsRTM )
     {
-        endrModel->RegisterStats( );
+        AddStat(shiftReqs);
+        AddUnitStat(shiftEnergy, "nJ");
+        AddStat(totalNumShifts);
     }
-
-    if( dataEncoder )
+    else
     {
-        dataEncoder->RegisterStats( );
+        if( endrModel )
+        {
+            endrModel->RegisterStats( );
+        }
+
+        if( dataEncoder )
+        {
+            dataEncoder->RegisterStats( );
+        }
+        
+        AddStat(cancelledWrites);
+        AddStat(cancelledWriteTime);
+        AddStat(pausedWrites);
+        AddStat(worstCaseWrite);
+        AddStat(num00Writes);
+        AddStat(num01Writes);
+        AddStat(num10Writes);
+        AddStat(num11Writes);
+        AddStat(mlcTimingHisto);
+        AddStat(cancelCountHisto);
+        AddStat(wpPauseHisto);
+        AddStat(wpCancelHisto);
     }
 
     if( p->EnergyModel == "current" )
@@ -228,10 +299,6 @@ void SubArray::RegisterStats( )
         AddUnitStat(writeEnergy, "nJ");
         AddUnitStat(refreshEnergy, "nJ");
     }
-
-    AddStat(cancelledWrites);
-    AddStat(cancelledWriteTime);
-    AddStat(pausedWrites);
 
     AddStat(averagePausesPerRequest);
     AddStat(measuredPauses);
@@ -255,18 +322,8 @@ void SubArray::RegisterStats( )
     AddStat(actWaitTotal);
     AddStat(actWaitAverage);
 
-    AddStat(worstCaseWrite);
-    AddStat(num00Writes);
-    AddStat(num01Writes);
-    AddStat(num10Writes);
-    AddStat(num11Writes);
     AddStat(averageWriteTime);
     AddStat(measuredWriteTimes);
-
-    AddStat(mlcTimingHisto);
-    AddStat(cancelCountHisto);
-    AddStat(wpPauseHisto);
-    AddStat(wpCancelHisto);
 }
 
 /*
@@ -303,11 +360,11 @@ bool SubArray::Activate( NVMainRequest *request )
 
     nextRead = MAX( nextRead, 
                     GetEventQueue()->GetCurrentCycle() 
-                        + p->tRCD - p->tAL );
+                        + p->tRCD - p->tAL + p->tSH * (numShifts / wordSize) );
 
     nextWrite = MAX( nextWrite, 
                      GetEventQueue()->GetCurrentCycle() 
-                         + p->tRCD - p->tAL );
+                        + p->tRCD - p->tAL + p->tSH * (numShifts / wordSize) );
 
     nextPowerDown = MAX( nextPowerDown, 
                          GetEventQueue()->GetCurrentCycle() 
@@ -316,7 +373,7 @@ bool SubArray::Activate( NVMainRequest *request )
     /* the request is deleted by RequestComplete() */
     request->owner = this;
     GetEventQueue( )->InsertEvent( EventResponse, this, request, 
-                    GetEventQueue()->GetCurrentCycle() + p->tRCD );
+                    GetEventQueue()->GetCurrentCycle() + p->tRCD + p->tSH * (numShifts / wordSize) );
 
     /* 
      * The relative row number is record rather than the absolute row number 
@@ -705,6 +762,124 @@ bool SubArray::Write( NVMainRequest *request )
 
     writes++;
     dataCycles += p->tBURST;
+    
+    return true;
+}
+
+//Does the Shift Operation before every read/write
+bool SubArray::Shift(NVMainRequest *request)
+{     
+    numShifts = 0;
+       
+    ncounter_t targetDBC, targetDOM;
+    request->address.GetTranslatedAddress(&targetDBC, &targetDOM, NULL, NULL, NULL, NULL);
+        
+    //Find closest AccessPort
+    ncounter_t port = 0;
+    if (request->type == WRITE || request->type == WRITE_PRECHARGE) 
+    {   
+        //We assume Write Port is always [0]
+        port = 0;
+    }
+    else
+    {
+        if (p->PortAccess == "static")
+        {
+            //e.g.: DOMAINS = 100, nPorts = 2: dom < 50 -> AP = 0; dom >= 50 -> AP = 1  
+            port = targetDOM / (DOMAINS / nPorts); 
+        }
+        else
+        {
+            //dynamic always takes the closest AP
+            int min = abs(rwPortPos[targetDBC][0] - static_cast<int>(targetDOM));
+            for (ncounter_t i = 1; i < nPorts; i++)
+            {
+                if (abs(rwPortPos[targetDBC][i] - static_cast<int>(targetDOM)) < min)
+                {
+                    min = abs(rwPortPos[targetDBC][i] - static_cast<int>(targetDOM));
+                    port = i;
+                }
+            }
+        }
+    }
+
+    numShifts = abs(rwPortPos[targetDBC][port] - static_cast<int>(targetDOM)); //Shifts to beginning of new Pos
+    int64_t portOffsetAfterShift = 0; //Change compared to original Position e.g +3 -> 3 Shifts to the "right"
+
+    if (p->RTMLayout == "serial")
+    {
+        if (p->PortUpdate == "lazy")
+        {
+            numShifts += wordSize - 1; //+Shifts for entire word
+            
+            //TODO: There is still a problem if (Dom + wSize -1) > DOMAINS
+            portOffsetAfterShift = (targetDOM /*+ wordSize - 1*/) - rwPortPos[targetDBC][port];
+        }
+        else
+        {
+            numShifts = (numShifts + (wordSize - 1)) * 2; //+Shifts for entire word - and back to startPos (dynamic)
+            portOffsetAfterShift = 0; //Always moves back to start
+        }
+    }
+    else
+    {
+        if (p->PortUpdate == "lazy")
+        {
+            numShifts *= wordSize; //numShifts for the entire word (interleaved)
+            portOffsetAfterShift = targetDOM - rwPortPos[targetDBC][port];
+        }
+        else
+        {
+            numShifts *= wordSize * 2; //numShifts for the entire word (interleaved) - and back to startPos (dynamic)
+            portOffsetAfterShift = 0;
+        }
+
+        //TODO: Need to set it for every DBC that was used for interleaved
+    }
+
+    //Set the Port positions for all Ports, where they should be now
+    for (ncounter_t i = 0; i < nPorts; i++)
+    {
+        rwPortPos[targetDBC][i] += portOffsetAfterShift;
+    }
+
+    //if port position is Invalid, display message and exit.
+    if (rwPortPos[targetDBC][port] > int(DOMAINS)) 
+    {	
+       std::cerr << "Invalid Port position" << std::endl;
+       exit(-1);
+    }
+
+    totalNumShifts += numShifts; 
+        
+    ncycle_t responseCycle;
+    if (p->RTMLayout == "serial")
+        responseCycle = GetEventQueue()->GetCurrentCycle() + p->tSH * numShifts;
+    else
+        responseCycle = GetEventQueue()->GetCurrentCycle() + p->tSH; //All Tracks happen in parallel -> no *numShifts.
+
+    //the request is deleted by RequestComplete()
+    request->owner = this;
+    GetEventQueue()->InsertEvent(EventResponse, this, request, responseCycle); 
+  
+    lastActivate = GetEventQueue()->GetCurrentCycle();
+    
+    //Calculate energy
+    if (p->EnergyModel == "current")
+    {
+        //DRAM Model 
+        subArrayEnergy += ((p->EIDD4R - p->EIDD3N) * (double)(p->tBURST)) / (double)(p->BANKS);
+
+        shiftEnergy += ((p->EIDD4R - p->EIDD3N) * (double)(p->tBURST)) / (double)(p->BANKS);
+    }
+    else
+    {
+        //Flat Energy Model
+        subArrayEnergy += p->Esh * (numShifts / wordSize); // Esh = energy/single-shift for the entire word.
+        shiftEnergy += p->Esh * (numShifts / wordSize);
+    }
+
+    shiftReqs++;
     
     return true;
 }
@@ -1143,6 +1318,10 @@ bool SubArray::IsIssuable( NVMainRequest *req, FailReason *reason )
             }
         }
     }
+    else if( req->type == SHIFT )
+    {
+        //We assume subarray can always shift, because ACTIVATE has been successful
+    }
     else if( req->type == READ || req->type == READ_PRECHARGE )
     {
         if( nextRead > (GetEventQueue()->GetCurrentCycle()) /* if it is too early to read */
@@ -1239,6 +1418,10 @@ bool SubArray::IssueCommand( NVMainRequest *req )
                 rv = this->Activate( req );
                 break;
             
+            case SHIFT:
+                rv = this->Shift( req );
+                break;
+
             case READ:
             case READ_PRECHARGE:
                 rv = this->Read( req );
@@ -1301,6 +1484,7 @@ bool SubArray::RequestComplete( NVMainRequest *req )
         {
             /* may implement more functions in the future */
             case ACTIVATE:
+            case SHIFT:
             case READ:
             case WRITE:
                 delete req;

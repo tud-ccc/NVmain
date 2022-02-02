@@ -1,10 +1,18 @@
 # Copyright (c) 2012-2013, The Microsystems Design Labratory (MDL)
 # Department of Computer Science and Engineering, The Pennsylvania State University
+#
+# Copyright (c) 2019-2022, Chair for Compiler Construction
+# Department of Computer Science, TU Dresden
 # All rights reserved.
 # 
 # This source code is part of NVMain - A cycle accurate timing, bit accurate
 # energy simulator for both volatile (e.g., DRAM) and non-volatile memory
-# (e.g., PCRAM). The source code is free and you can redistribute and/or
+# (e.g., PCRAM). 
+# 
+# The original NVMain doesn't support simulating RaceTrack memory.
+# This current version, which we call RTSim, enables RTM simulation. 
+# 
+# The source code is free and you can redistribute and/or
 # modify it by providing that the following conditions are met:
 # 
 #  1) Redistributions of source code must retain the above copyright notice,
@@ -28,12 +36,14 @@
 # Author list: 
 #   Matt Poremba    ( Email: mrp5060 at psu dot edu 
 #                     Website: http://www.cse.psu.edu/~poremba/ )
+#
+#   Asif Ali Khan   ( Email: asif_ali.khan@tu-dresden.de )
 
 import os, sys
 import subprocess
 
 from os.path import basename
-from gem5_scons import Transform
+#from gem5_scons import Transform
 
 
 HG_COMMAND = 'hg'
@@ -91,6 +101,6 @@ elif "NVMAINPATH" in os.environ:
     # Nothing to be done here for now.
     pass
 else:
-    print "ERROR: What kind of build is this?"
+    print ("ERROR: What kind of build is this?")
     sys.exit(1)
 

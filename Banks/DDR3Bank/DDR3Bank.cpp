@@ -1,11 +1,19 @@
 /*******************************************************************************
 * Copyright (c) 2012-2014, The Microsystems Design Labratory (MDL)
 * Department of Computer Science and Engineering, The Pennsylvania State University
+*
+* Copyright (c) 2019-2022, Chair for Compiler Construction
+* Department of Computer Science, TU Dresden
 * All rights reserved.
 * 
 * This source code is part of NVMain - A cycle accurate timing, bit accurate
 * energy simulator for both volatile (e.g., DRAM) and non-volatile memory
-* (e.g., PCRAM). The source code is free and you can redistribute and/or
+* (e.g., PCRAM). 
+* 
+* The original NVMain doesn't support simulating RaceTrack memory.
+* This current version, which we call RTSim, enables RTM simulation. 
+* 
+* The source code is free and you can redistribute and/or
 * modify it by providing that the following conditions are met:
 * 
 *  1) Redistributions of source code must retain the above copyright notice,
@@ -31,6 +39,9 @@
 *                     Website: http://www.cse.psu.edu/~poremba/ )
 *   Tao Zhang       ( Email: tzz106 at cse dot psu dot edu
 *                     Website: http://www.cse.psu.edu/~tzz106 )
+*
+*   Asif Ali Khan   ( Email: asif_ali.khan@tu-dresden.de )
+* 
 *******************************************************************************/
 
 #include "Banks/DDR3Bank/DDR3Bank.h"
@@ -100,6 +111,11 @@ DDR3Bank::DDR3Bank( )
     activates = 0;
     precharges = 0;
     refreshes = 0;
+
+    //RTM
+    shiftEnergy = 0.0f;
+    shiftReqs = 0;
+    totalNumShifts = 0;
 
     actWaits = 0;
     actWaitTotal = 0;
@@ -196,6 +212,14 @@ void DDR3Bank::RegisterStats( )
     AddStat(activates);
     AddStat(precharges);
     AddStat(refreshes);
+
+    //Only for RTM
+    if (p->MemIsRTM)
+    {
+        AddUnitStat(shiftEnergy, "nJ");
+        AddStat(shiftReqs);
+        AddStat(totalNumShifts);
+    }
 
     AddStat(activeCycles);
     AddStat(standbyCycles);
@@ -341,8 +365,8 @@ bool DDR3Bank::Activate( NVMainRequest *request )
     request->address.GetTranslatedAddress( &activateRow, NULL, NULL, NULL, NULL, &activateSubArray );
 
     /* update the timing constraints */
-    nextPowerDown = MAX( nextPowerDown, 
-                         GetEventQueue()->GetCurrentCycle() + p->tRCD );
+    nextPowerDown = MAX(nextPowerDown, 
+                        GetEventQueue()->GetCurrentCycle() + p->tRCD + p->tSH);
 
     /* issue ACTIVATE to the target subarray */
     bool success = GetChild( request )->IssueCommand( request );
@@ -360,6 +384,17 @@ bool DDR3Bank::Activate( NVMainRequest *request )
         std::cerr << "NVMain Error: Bank " << bankId << " failed to "
             << "activate the subarray " << activateSubArray << std::endl;
     }
+
+    return success;
+}
+
+
+//Issue Shift to target DBC
+bool DDR3Bank::Shift(NVMainRequest *request)
+{
+    bool success = GetChild(request)->IssueCommand(request);
+
+    shiftReqs++;
 
     return success;
 }
@@ -740,6 +775,10 @@ bool DDR3Bank::IsIssuable( NVMainRequest *req, FailReason *reason )
             rv = GetChild( req )->IsIssuable( req, reason );
         }
     }
+    else if (req->type == SHIFT)
+    {
+        rv = GetChild(req)->IsIssuable(req, reason);
+    }
     else if( req->type == READ || req->type == READ_PRECHARGE )
     {
         if( nextRead > (GetEventQueue()->GetCurrentCycle()) 
@@ -884,6 +923,10 @@ bool DDR3Bank::IssueCommand( NVMainRequest *req )
                 rv = this->Activate( req );
                 break;
             
+            case SHIFT:
+                rv = this->Shift( req );
+                break;
+                
             case READ:
             case READ_PRECHARGE:
                 rv = this->Read( req );
@@ -1001,7 +1044,7 @@ void DDR3Bank::CalculateStats( )
     else
         utilization = 0.0f;
 
-    bankEnergy = activeEnergy = burstEnergy = refreshEnergy 
+    bankEnergy = activeEnergy = burstEnergy = refreshEnergy = shiftEnergy
                = 0.0f;
 
     for( unsigned saIdx = 0; saIdx < subArrayNum; saIdx++ )
@@ -1010,6 +1053,12 @@ void DDR3Bank::CalculateStats( )
         StatType actEstat = GetStat( GetChild(saIdx), "activeEnergy" );
         StatType bstEstat = GetStat( GetChild(saIdx), "burstEnergy" );
         StatType refEstat = GetStat( GetChild(saIdx), "refreshEnergy" );
+
+        //RTM
+        StatType shiEstat = GetStat(GetChild(saIdx), "shiftEnergy");
+        StatType totalnumShi = GetStat(GetChild(saIdx), "totalNumShifts");
+        shiftEnergy += CastStat(shiEstat, double);
+        totalNumShifts += CastStat(totalnumShi, ncounter_t);
 
         bankEnergy += CastStat( saEstat, double );
         activeEnergy += CastStat( actEstat, double );

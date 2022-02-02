@@ -1,11 +1,19 @@
 /*******************************************************************************
 * Copyright (c) 2012-2014, The Microsystems Design Labratory (MDL)
 * Department of Computer Science and Engineering, The Pennsylvania State University
+*
+* Copyright (c) 2019-2022, Chair for Compiler Construction
+* Department of Computer Science, TU Dresden
 * All rights reserved.
 * 
 * This source code is part of NVMain - A cycle accurate timing, bit accurate
 * energy simulator for both volatile (e.g., DRAM) and non-volatile memory
-* (e.g., PCRAM). The source code is free and you can redistribute and/or
+* (e.g., PCRAM). 
+* 
+* The original NVMain doesn't support simulating RaceTrack memory.
+* This current version, which we call RTSim, enables RTM simulation. 
+* 
+* The source code is free and you can redistribute and/or
 * modify it by providing that the following conditions are met:
 * 
 *  1) Redistributions of source code must retain the above copyright notice,
@@ -31,6 +39,9 @@
 *                     Website: http://www.cse.psu.edu/~poremba/ )
 *   Tao Zhang       ( Email: tzz106 at cse dot psu dot edu
 *                     Website: http://www.cse.psu.edu/~tzz106 )
+*
+*   Asif Ali Khan   ( Email: asif_ali.khan@tu-dresden.de )
+* 
 *******************************************************************************/
 
 #include "Ranks/StandardRank/StandardRank.h"
@@ -67,6 +78,11 @@ StandardRank::StandardRank( )
 
     reads = 0;
     writes = 0;
+
+    //RTM
+    shiftEnergy = 0.0f;
+    shiftReqs = 0;
+    totalNumShifts  = 0;
 
     actWaits = 0;
     actWaitTotal = 0;
@@ -216,6 +232,14 @@ void StandardRank::RegisterStats( )
     AddStat(reads);
     AddStat(writes);
 
+    //Only for RTM
+    if (p->MemIsRTM)
+    {
+        AddUnitStat(shiftEnergy, "nJ");
+        AddStat(shiftReqs);
+        AddStat(totalNumShifts);
+    }
+
     AddStat(activeCycles);
     AddStat(standbyCycles);
     AddStat(fastExitActiveCycles);
@@ -280,7 +304,7 @@ bool StandardRank::Activate( NVMainRequest *request )
         RAWindex = (RAWindex + 1) % rawNum;
         lastActivate[RAWindex] = GetEventQueue()->GetCurrentCycle();
         nextActivate = MAX( nextActivate, 
-                            GetEventQueue()->GetCurrentCycle() + p->tRRDR );
+                            GetEventQueue()->GetCurrentCycle() + p->tRRDR + p->tSH );
     }
     else
     {
@@ -289,6 +313,16 @@ bool StandardRank::Activate( NVMainRequest *request )
     }
 
     return true;
+}
+
+//Issue Shift to target Bank
+bool StandardRank::Shift(NVMainRequest *request)
+{
+    bool success = GetChild(request)->IssueCommand(request);
+
+    shiftReqs++;
+
+    return success;
 }
 
 bool StandardRank::Read( NVMainRequest *request )
@@ -671,6 +705,10 @@ bool StandardRank::IsIssuable( NVMainRequest *req, FailReason *reason )
             }
         }
     }
+    else if (req->type == SHIFT)
+    {
+        rv = GetChild(req)->IsIssuable(req, reason);
+    }
     else if( req->type == READ || req->type == READ_PRECHARGE )
     {
         if( nextRead > GetEventQueue( )->GetCurrentCycle( ) )
@@ -784,6 +822,10 @@ bool StandardRank::IssueCommand( NVMainRequest *req )
                 rv = this->Activate( req );
                 break;
             
+            case SHIFT:
+                rv = this->Shift( req );
+                break;
+                
             case READ:
             case READ_PRECHARGE:
                 rv = this->Read( req );
@@ -947,7 +989,7 @@ void StandardRank::CalculateStats( )
 {
     NVMObject::CalculateStats( );
 
-    totalEnergy = activateEnergy = burstEnergy = refreshEnergy = 0.0;
+    totalEnergy = activateEnergy = burstEnergy = refreshEnergy = shiftEnergy = 0.0;
     totalPower = backgroundPower = activatePower = burstPower = refreshPower = 0.0;
     reads = writes = 0;
 
@@ -957,6 +999,12 @@ void StandardRank::CalculateStats( )
         StatType actEstat =  GetStat( GetChild(i), "activeEnergy" );
         StatType bstEstat =  GetStat( GetChild(i), "burstEnergy" );
         StatType refEstat =  GetStat( GetChild(i), "refreshEnergy" );
+
+        //RTM
+        StatType shiEstat = GetStat(GetChild(i), "shiftEnergy");
+        StatType totalnumShi = GetStat(GetChild(i), "totalNumShifts");
+        shiftEnergy += CastStat(shiEstat, double);
+        totalNumShifts += CastStat(totalnumShi, ncounter_t);
 
         totalEnergy += CastStat( bankEstat, double );
         activateEnergy += CastStat( actEstat, double );
