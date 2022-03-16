@@ -52,7 +52,6 @@
 #include "src/Config.h"
 #include "src/EnduranceModel.h"
 #include "src/DataEncoder.h"
-#include "src/MemoryController.h"
 #include "include/NVMAddress.h"
 #include "include/NVMainRequest.h"
 #include "src/Params.h"
@@ -134,6 +133,9 @@ class SubArray : public NVMObject
 
     void Cycle( ncycle_t );
     bool IsWriting( ) { return isWriting; }
+    
+    //RTM
+    ncounters_t** getPortPosPointer() { return rwPortPos; };
 
   private:
     Config *conf;
@@ -191,11 +193,10 @@ class SubArray : public NVMObject
     ncounter_t DOMAINS;
     ncounter_t nPorts;
     ncounter_t wordSize;
-
-    //Internal State
-    int **rwPortPos;      //1. dim: DBC, 2. dim: Port 
-    int **rwPortInitPos;  //initial positions of ports, used in the static port update policy
     
+    //Internal State
+    ncounters_t** rwPortPos;
+
     //Stats
     double shiftEnergy;
     ncounter_t shiftReqs;

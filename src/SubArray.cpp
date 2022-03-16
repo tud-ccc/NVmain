@@ -51,7 +51,6 @@
 #include "Endurance/NullModel/NullModel.h"
 #include "Endurance/Distributions/Normal.h"
 #include "DataEncoders/DataEncoderFactory.h"
-#include "MemControl/RTM/RTM.h"
 
 #include <signal.h>
 #include <cassert>
@@ -182,23 +181,19 @@ void SubArray::SetConfig( Config *c, bool createChildren )
         nPorts  = p->nPorts;
         wordSize = p->wordSize;
         
-        rwPortPos = new int*[DBCS];
-        rwPortInitPos = new int*[DBCS];
+        rwPortPos = new ncounters_t*[DBCS];
         
         for (ncounter_t i = 0; i < DBCS; i++)
         {
-            rwPortPos[i] = new int[nPorts];
-            rwPortInitPos[i] = new int[nPorts];
+            rwPortPos[i] = new ncounters_t[nPorts];
 
             for (ncounter_t j = 0; j < nPorts; j++)
             {
                 //Generalized:
-                //rwPortPos[i][j]     = (j == 0) ? 0 : (j * DOMAINS / nPorts) - 1;
-                //rwPortInitPos[i][j] = (j == 0) ? 0 : (j * DOMAINS / nPorts) - 1;
+                //rwPortPos[i][j] = (j == 0) ? 0 : (j * DOMAINS / nPorts) - 1;
 
                 //Specialized for some reason -> ask Asif?
-                rwPortPos[i][j]     = j * DOMAINS / nPorts;
-                rwPortInitPos[i][j] = j * DOMAINS / nPorts;
+                rwPortPos[i][j] = j * DOMAINS / nPorts;
             }
         }
     }
@@ -776,7 +771,7 @@ bool SubArray::Shift(NVMainRequest *request)
         
     //Find closest AccessPort
     ncounter_t port = 0;
-    if (request->type == WRITE || request->type == WRITE_PRECHARGE) 
+    if (request->flags & NVMainRequest::FLAG_WRITE_SHIFT) 
     {   
         //We assume Write Port is always [0]
         port = 0;

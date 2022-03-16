@@ -39,9 +39,6 @@
 *                     Website: http://www.cse.psu.edu/~poremba/ )
 *   Tao Zhang       ( Email: tzz106 at cse dot psu dot edu
 *                     Website: http://www.cse.psu.edu/~tzz106 )
-*
-*   Asif Ali Khan   ( Email: asif_ali.khan@tu-dresden.de )
-* 
 *******************************************************************************/
 
 #include "src/MemoryController.h"
@@ -954,36 +951,6 @@ NVMainRequest *MemoryController::MakeActivateRequest( const ncounter_t row,
     return activateRequest;
 }
 
-NVMainRequest *MemoryController::MakeShiftRequest( NVMainRequest *triggerRequest )
-{
-    NVMainRequest *shiftRequest = new NVMainRequest();
-
-    shiftRequest->type = SHIFT;
-    shiftRequest->issueCycle = GetEventQueue()->GetCurrentCycle();
-    shiftRequest->address = triggerRequest->address;
-    shiftRequest->owner = this;
-
-    return shiftRequest;
-}
-
-NVMainRequest *MemoryController::MakeShiftRequest(const ncounter_t row,
-                                                    const ncounter_t col,
-                                                    const ncounter_t bank,
-                                                    const ncounter_t rank,
-                                                    const ncounter_t subarray)
-{
-    NVMainRequest *shiftRequest = new NVMainRequest();
-
-    shiftRequest->type = SHIFT;
-    ncounter_t actAddr = GetDecoder()->ReverseTranslate(row, col, bank, rank, id, subarray);
-    shiftRequest->address.SetPhysicalAddress(actAddr);
-    shiftRequest->address.SetTranslatedAddress(row, col, bank, rank, id, subarray);
-    shiftRequest->issueCycle = GetEventQueue()->GetCurrentCycle();
-    shiftRequest->owner = this;
-
-    return shiftRequest;
-}
-
 NVMainRequest *MemoryController::MakePrechargeRequest( NVMainRequest *triggerRequest )
 {
     NVMainRequest *prechargeRequest = new NVMainRequest( );
@@ -1593,13 +1560,6 @@ bool MemoryController::IssueMemoryCommands( NVMainRequest *req )
         }
         else
         {
-            if( p->MemIsRTM )
-            {
-                NVMainRequest *shiftRequest = MakeShiftRequest( req ); //Place a shift request before the actual read/write on the command queue
-                shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting( )) ? NVMainRequest::FLAG_PRIORITY : 0;
-                commandQueues[queueId].push_back( shiftRequest );
-            }
-
             commandQueues[queueId].push_back( req );
         }
 
@@ -1626,13 +1586,6 @@ bool MemoryController::IssueMemoryCommands( NVMainRequest *req )
         NVMainRequest *actRequest = MakeActivateRequest( req );
         actRequest->flags |= (writingArray != NULL && writingArray->IsWriting( )) ? NVMainRequest::FLAG_PRIORITY : 0;
         commandQueues[queueId].push_back( actRequest );
-
-        if( p->MemIsRTM )
-        {
-             NVMainRequest *shiftRequest = MakeShiftRequest( req ); //Place a shift request before the actual read/write on the command queue
-             shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting( )) ? NVMainRequest::FLAG_PRIORITY : 0;
-             commandQueues[queueId].push_back( shiftRequest );
-        }
 
         commandQueues[queueId].push_back( req );
         activeSubArray[rank][bank][subarray] = true;
@@ -1662,13 +1615,6 @@ bool MemoryController::IssueMemoryCommands( NVMainRequest *req )
             /* if Restricted Close-Page is applied, we should never be here */
             assert( p->ClosePage != 2 );
 
-            if( p->MemIsRTM )
-            {
-                NVMainRequest *shiftRequest = MakeShiftRequest( req ); //Place a shift request before the actual read/write on the command queue
-                shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting( )) ? NVMainRequest::FLAG_PRIORITY : 0;
-                commandQueues[queueId].push_back( shiftRequest );
-            }
-
             commandQueues[queueId].push_back( MakeImplicitPrechargeRequest( req ) );
             activeSubArray[rank][bank][subarray] = false;
             effectiveRow[rank][bank][subarray] = p->ROWS;
@@ -1689,13 +1635,6 @@ bool MemoryController::IssueMemoryCommands( NVMainRequest *req )
         }
         else
         {
-            if( p->MemIsRTM )
-            {
-                NVMainRequest *shiftRequest = MakeShiftRequest( req ); //Place a shift request before the actual read/write on the command queue
-                shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting( )) ? NVMainRequest::FLAG_PRIORITY : 0;
-                commandQueues[queueId].push_back( shiftRequest );
-            }
-
             commandQueues[queueId].push_back( req );
         }
 

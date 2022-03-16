@@ -39,9 +39,6 @@
 *                     Website: http://www.cse.psu.edu/~poremba/ )
 *   Tao Zhang       ( Email: tzz106 at cse dot psu dot edu
 *                     Website: http://www.cse.psu.edu/~tzz106 )
-*
-*   Asif Ali Khan   ( Email: asif_ali.khan@tu-dresden.de )
-* 
 *******************************************************************************/
 
 #ifndef __MEMORYCONTROLLER_H__
@@ -174,10 +171,6 @@ class MemoryController : public NVMObject
     NVMainRequest *MakeActivateRequest( const ncounter_t, const ncounter_t, 
                                         const ncounter_t, const ncounter_t, 
                                         const ncounter_t );
-    NVMainRequest *MakeShiftRequest( NVMainRequest *triggerRequest );
-    NVMainRequest *MakeShiftRequest( const ncounter_t, const ncounter_t, 
-                                     const ncounter_t, const ncounter_t, 
-                                     const ncounter_t );
     NVMainRequest *MakeImplicitPrechargeRequest( NVMainRequest *triggerRequest );
     NVMainRequest *MakePrechargeRequest( NVMainRequest *triggerRequest );
     NVMainRequest *MakePrechargeRequest( const ncounter_t, const ncounter_t, 

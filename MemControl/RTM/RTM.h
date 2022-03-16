@@ -61,13 +61,7 @@ class RTM : public MemoryController
     void RegisterStats();
     void SetConfig(Config* conf, bool createChildren = true);
     
-    //All Find...() have yet to be implemented
-    bool FindCloseAPHit(std::list<NVMainRequest*>& transactionQueue, NVMainRequest** hitRequest);
-    bool FindCloseAPHit(std::list<NVMainRequest*>& transactionQueue, NVMainRequest** hitRequest, NVM::SchedulingPredicate& p);
-    bool FindRTMRowBufferHit(std::list<NVMainRequest*>& transactionQueue, NVMainRequest** hitRequest);
-    bool FindRTMRowBufferHit(std::list<NVMainRequest*>& transactionQueue, NVMainRequest** hitRequest, NVM::SchedulingPredicate& p);
-
-  private:
+  protected:
     //Shorthand for the only TransactionQ we use
     NVMTransactionQueue* memQueue;
 
@@ -94,6 +88,15 @@ class RTM : public MemoryController
     ncounter_t starvation_precharges;
     ncounter_t write_pauses;
 
+    NVMainRequest* MakeShiftRequest(NVMainRequest* triggerRequest);
+
+    bool IssueMemoryCommands(NVMainRequest* req);
+
+    //All Find...() have yet to be implemented
+    bool FindCloseAPHit(std::list<NVMainRequest*>& transactionQueue, NVMainRequest** hitRequest);
+    bool FindCloseAPHit(std::list<NVMainRequest*>& transactionQueue, NVMainRequest** hitRequest, NVM::SchedulingPredicate& p);
+    bool FindRTMRowBufferHit(std::list<NVMainRequest*>& transactionQueue, NVMainRequest** hitRequest);
+    bool FindRTMRowBufferHit(std::list<NVMainRequest*>& transactionQueue, NVMainRequest** hitRequest, NVM::SchedulingPredicate& p);
 };
 
 };

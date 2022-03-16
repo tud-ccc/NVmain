@@ -191,6 +191,7 @@ class NVMainRequest
         FLAG_FORCED = 32,               // This write can not be paused or cancelled
         FLAG_PRIORITY = 64,             // Request (or precursor) that takes priority over write
         FLAG_ISSUED = 128,              // Request has left the command queue
+        FLAG_WRITE_SHIFT = 256,         // RTM Only: Shift Request before a Write Acces => write-AP
         FLAG_COUNT
     };
 

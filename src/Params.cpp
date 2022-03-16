@@ -416,7 +416,7 @@ void Params::SetParams( Config *c )
             c->GetValueUL("DOMAINS", COLS);
             c->GetValueUL("DOMAINS", DOMAINS);
             c->GetValueUL("nPorts", nPorts);
-            c->GetValueUL("wordSize", wordSize);
+            c->GetValueUL("WordSize", wordSize);
             c->GetValueUL("QueueSize", queueSize);
             c->GetValueUL("StarvationThreshold", starvationThreshold);
 

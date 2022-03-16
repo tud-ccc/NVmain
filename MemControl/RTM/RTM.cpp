@@ -41,6 +41,7 @@
 #include "src/EventQueue.h"
 #include "src/Params.h"
 #include "include/NVMainRequest.h"
+#include "src/SubArray.h"
 #ifndef TRACE
 #ifdef GEM5
   #include "SimInterface/Gem5Interface/Gem5Interface.h"
@@ -271,6 +272,205 @@ void RTM::Cycle(ncycle_t steps)
 void RTM::CalculateStats()
 {
     MemoryController::CalculateStats();
+}
+
+NVMainRequest* RTM::MakeShiftRequest(NVMainRequest* triggerRequest)
+{
+    NVMainRequest* shiftRequest = new NVMainRequest();
+
+    shiftRequest->type = SHIFT;
+    shiftRequest->issueCycle = GetEventQueue()->GetCurrentCycle();
+    shiftRequest->address = triggerRequest->address;
+    shiftRequest->owner = this;
+
+    if (triggerRequest->type == WRITE || triggerRequest->type == WRITE_PRECHARGE) 
+        shiftRequest->flags = shiftRequest->flags | NVMainRequest::FLAG_WRITE_SHIFT;
+
+    return shiftRequest;
+}
+
+//Copied to here from MemoryController.cpp
+bool RTM::IssueMemoryCommands(NVMainRequest* req)
+{
+    bool rv = false;
+    ncounter_t rank, bank, row, subarray, col;
+
+    req->address.GetTranslatedAddress(&row, &col, &bank, &rank, NULL, &subarray);
+
+    SubArray* writingArray = FindChild(req, SubArray);
+
+    ncounter_t muxLevel = static_cast<ncounter_t>(col / p->RBSize);
+    ncounter_t queueId = GetCommandQueueId(req->address);
+
+    /*
+     *  If the request is somehow accessible (e.g., via caching, etc), but the
+     *  bank state does not match the memory controller, just issue the request
+     *  without updating any internal states.
+     */
+    FailReason reason;
+    NVMainRequest* cachedRequest = MakeCachedRequest(req);
+
+    if (GetChild()->IsIssuable(cachedRequest, &reason))
+    {
+        /* Differentiate from row-buffer hits. */
+        if (!activateQueued[rank][bank] 
+             || !activeSubArray[rank][bank][subarray]
+             || effectiveRow[rank][bank][subarray] != row 
+             || effectiveMuxedRow[rank][bank][subarray] != muxLevel) 
+        {
+            req->issueCycle = GetEventQueue()->GetCurrentCycle();
+
+            // Update starvation ??
+            commandQueues[queueId].push_back(req);
+
+            delete cachedRequest;
+
+            return true;
+        }
+    }
+
+    delete cachedRequest;
+
+    if (!activateQueued[rank][bank] && commandQueues[queueId].empty())
+    {
+        /* Any activate will request the starvation counter */
+        activateQueued[rank][bank] = true;
+        activeSubArray[rank][bank][subarray] = true;
+        effectiveRow[rank][bank][subarray] = row;
+        effectiveMuxedRow[rank][bank][subarray] = muxLevel;
+        starvationCounter[rank][bank][subarray] = 0;
+
+        req->issueCycle = GetEventQueue()->GetCurrentCycle();
+
+        NVMainRequest* actRequest = MakeActivateRequest(req);
+        actRequest->flags |= (writingArray != NULL && writingArray->IsWriting()) ? NVMainRequest::FLAG_PRIORITY : 0;
+        commandQueues[queueId].push_back(actRequest);
+
+        /* Different row buffer management policy has different behavior */ 
+        /*
+         * There are two possibilities that the request is the last request:
+         * 1) ClosePage == 1 and there is no other request having row
+         * buffer hit
+         * or 2) ClosePage == 2, the request is always the last request
+         */
+        if (req->flags & NVMainRequest::FLAG_LAST_REQUEST && p->UsePrecharge)
+        {
+            commandQueues[queueId].push_back(MakeImplicitPrechargeRequest(req));
+            activeSubArray[rank][bank][subarray] = false;
+            effectiveRow[rank][bank][subarray] = p->ROWS;
+            effectiveMuxedRow[rank][bank][subarray] = p->ROWS;
+            activateQueued[rank][bank] = false;
+        }
+        else
+        {
+            NVMainRequest *shiftRequest = MakeShiftRequest(req); //Place a shift request before the actual read/write on the command queue
+            shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting()) ? NVMainRequest::FLAG_PRIORITY : 0;
+            commandQueues[queueId].push_back(shiftRequest);
+
+            commandQueues[queueId].push_back(req);
+        }
+
+        rv = true;
+    }
+    else if (activateQueued[rank][bank] 
+            && (!activeSubArray[rank][bank][subarray] 
+                || effectiveRow[rank][bank][subarray] != row 
+                || effectiveMuxedRow[rank][bank][subarray] != muxLevel)
+            && commandQueues[queueId].empty())
+    {
+        /* Any activate will request the starvation counter */
+        starvationCounter[rank][bank][subarray] = 0;
+        activateQueued[rank][bank] = true;
+
+        req->issueCycle = GetEventQueue()->GetCurrentCycle();
+
+        if (activeSubArray[rank][bank][subarray] && p->UsePrecharge)
+        {
+            commandQueues[queueId].push_back( 
+                    MakePrechargeRequest(effectiveRow[rank][bank][subarray], 0, bank, rank, subarray));
+        }
+
+        NVMainRequest* actRequest = MakeActivateRequest(req);
+        actRequest->flags |= (writingArray != NULL && writingArray->IsWriting()) ? NVMainRequest::FLAG_PRIORITY : 0;
+        commandQueues[queueId].push_back(actRequest);
+
+        NVMainRequest* shiftRequest = MakeShiftRequest(req); //Place a shift request before the actual read/write on the command queue
+        shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting()) ? NVMainRequest::FLAG_PRIORITY : 0;
+        commandQueues[queueId].push_back(shiftRequest);
+
+        commandQueues[queueId].push_back(req);
+        activeSubArray[rank][bank][subarray] = true;
+        effectiveRow[rank][bank][subarray] = row;
+        effectiveMuxedRow[rank][bank][subarray] = muxLevel;
+
+        rv = true;
+    }
+    else if (activateQueued[rank][bank] 
+            && activeSubArray[rank][bank][subarray]
+            && effectiveRow[rank][bank][subarray] == row 
+            && effectiveMuxedRow[rank][bank][subarray] == muxLevel)
+    {
+        starvationCounter[rank][bank][subarray]++;
+
+        req->issueCycle = GetEventQueue()->GetCurrentCycle();
+
+        /* Different row buffer management policy has different behavior */ 
+        /*
+         * There are two possibilities that the request is the last request:
+         * 1) ClosePage == 1 and there is no other request having row
+         * buffer hit
+         * or 2) ClosePage == 2, the request is always the last request
+         */
+        if (req->flags & NVMainRequest::FLAG_LAST_REQUEST && p->UsePrecharge)
+        {
+            /* if Restricted Close-Page is applied, we should never be here */
+            assert(p->ClosePage != 2);
+
+            NVMainRequest* shiftRequest = MakeShiftRequest(req); //Place a shift request before the actual read/write on the command queue
+            shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting()) ? NVMainRequest::FLAG_PRIORITY : 0;
+            commandQueues[queueId].push_back(shiftRequest);
+
+            commandQueues[queueId].push_back(MakeImplicitPrechargeRequest(req));
+            activeSubArray[rank][bank][subarray] = false;
+            effectiveRow[rank][bank][subarray] = p->ROWS;
+            effectiveMuxedRow[rank][bank][subarray] = p->ROWS;
+
+            bool idle = true;
+            for (ncounter_t i = 0; i < subArrayNum; i++)
+            {
+                if (activeSubArray[rank][bank][i] == true)
+                {
+                    idle = false;
+                    break;
+                }
+            }
+
+            if (idle)
+                activateQueued[rank][bank] = false;
+        }
+        else
+        {
+            NVMainRequest* shiftRequest = MakeShiftRequest(req); //Place a shift request before the actual read/write on the command queue
+            shiftRequest->flags |= (writingArray != NULL && writingArray->IsWriting()) ? NVMainRequest::FLAG_PRIORITY : 0;
+            commandQueues[queueId].push_back(shiftRequest);
+
+            commandQueues[queueId].push_back(req);
+        }
+
+        rv = true;
+    }
+    else
+    {
+        rv = false;
+    }
+
+    /* Schedule wake event for memory commands if not scheduled. */
+    if (rv == true)
+    {
+        ScheduleCommandWake();
+    }
+
+    return rv;
 }
 
 bool RTM::FindRTMRowBufferHit(std::list<NVMainRequest*>& transactionQueue, NVMainRequest** hitRequest)
